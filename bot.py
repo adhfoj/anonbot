@@ -890,26 +890,26 @@ def set_maintenance_mode(status: bool):
                 ("true" if status else "false",),
             )
 
-def get_media_prefix():
+def get_media_caption():
     with get_connection() as conn:
         with conn.cursor() as c:
-            c.execute("SELECT value FROM settings WHERE key='media_prefix'")
+            c.execute("SELECT value FROM settings WHERE key='media_caption'")
             row = c.fetchone()
             return row[0] if row else None
 
-def set_media_prefix(prefix_text: str):
+def set_media_caption(caption_text: str):
     with get_connection() as conn:
         with conn.cursor() as c:
-            if not prefix_text:
-                c.execute("DELETE FROM settings WHERE key='media_prefix'")
+            if not caption_text:
+                c.execute("DELETE FROM settings WHERE key='media_caption'")
             else:
                 c.execute(
                     """
                     INSERT INTO settings(key, value)
-                    VALUES('media_prefix', %s)
+                    VALUES('media_caption', %s)
                     ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value
                     """,
-                    (prefix_text,)
+                    (caption_text,)
                 )
 
 
@@ -2075,13 +2075,14 @@ def _process_single(message):
     else:
         # 👑 ONLY ADMIN CAN HAVE CAPTION
         if is_admin(sender_id):
-            media_prefix = get_media_prefix()
-            new_caption = message.caption or ""
+            media_caption = get_media_caption()
+            original_caption = message.caption or ""
 
-            if media_prefix:
+            if media_caption:
                 username = get_username(sender_id) or ''
-                final_prefix = media_prefix.replace("{username}", username)
-                new_caption = f"{final_prefix}\n{new_caption}".strip()
+                new_caption = media_caption.replace("{username}", username).replace("{caption}", original_caption).strip()
+            else:
+                new_caption = original_caption
 
             send_fn = lambda uid: _copy_message_with_retry(
                 uid, sender_id, message.message_id,
@@ -2136,7 +2137,7 @@ def _process_album(messages):
     now = int(time.time())
     if not targets:
         return
-    media_prefix = get_media_prefix()
+    media_caption = get_media_caption()
     media_items = []
     
     for index, msg in enumerate(messages):
@@ -2147,10 +2148,9 @@ def _process_album(messages):
             original_caption = msg.caption or ""
             
             if is_admin(sender_id):
-                if media_prefix:
+                if media_caption:
                     username = get_username(sender_id) or ''
-                    final_prefix = media_prefix.replace("{username}", username)
-                    new_caption = f"{final_prefix}\n{original_caption}".strip()
+                    new_caption = media_caption.replace("{username}", username).replace("{caption}", original_caption).strip()
                 else:
                     new_caption = original_caption
             else:
@@ -3785,19 +3785,19 @@ def get_chat_id(message):
 def get_channel_id(message):
     bot.send_message(message.chat.id, f"Channel ID: {message.chat.id}")
 
-@bot.message_handler(commands=['setmediaprefix'])
-def set_media_prefix_cmd(message):
+@bot.message_handler(commands=['setmediacaption'])
+def set_media_caption_cmd(message):
     if not is_admin(message.chat.id):
         return
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        bot.send_message(message.chat.id, "Usage: /setmediaprefix [Your custom prefix]\nProvide 'none' to remove.\nUse {username} to include sender name.")
+        bot.send_message(message.chat.id, "Usage: /setmediacaption [Your custom caption]\nProvide 'none' to remove.\nUse {username} to include sender name.\nUse {caption} to include original caption.")
         return
     val = parts[1].strip()
     if val.lower() == 'none':
         val = ""
-    set_media_prefix(val)
-    bot.send_message(message.chat.id, f"✅ Media prefix updated to: {val}")
+    set_media_caption(val)
+    bot.send_message(message.chat.id, f"✅ Media caption updated to: {val}")
 
 # =========================
 # 🎁 REFERRAL SYSTEM
