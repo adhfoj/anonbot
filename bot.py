@@ -1520,20 +1520,45 @@ def start_command(message):
 
     else:
         bot.send_message(user_id, "👋 Welcome back!")
-
 @bot.message_handler(commands=['referral'])
 def referral_command(message):
     user_id = message.chat.id
+
+    # 🚫 Restriction checks (important)
+    if is_banned(user_id):
+        bot.send_message(user_id, "🚫 You are banned.")
+        return
+
+    if get_username(user_id) is None:
+        bot.send_message(user_id, "⚠️ Set username first using /start.")
+        return
+
     try:
         bot_info = bot.get_me()
+
+        # 🔗 Generate referral link
         ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
+
+        # 📊 Optional: count referrals (bonus improvement)
+        with get_connection() as conn:
+            with conn.cursor() as c:
+                c.execute(
+                    "SELECT COUNT(*) FROM users WHERE referred_by=%s",
+                    (user_id,)
+                )
+                count = c.fetchone()[0]
+
         bot.send_message(
             user_id,
-            f"🔗 Your referral link:\n{ref_link}\n\nShare this link to get 1 hour of free activity time for every user who joins!"
+            f"🔗 Your referral link:\n{ref_link}\n\n"
+            f"👥 Total referrals: {count}\n\n"
+            "🎁 Earn 1 hour of activity time for each user who joins using your link!"
         )
+
     except Exception as e:
-        bot.send_message(user_id, "Error generating referral link. Please try again later.")
-        print(f"Referral link error: {e}")
+        print("Referral error:", e)
+        bot.send_message(user_id, "⚠️ Failed to generate referral link. Try again later.")
+
 # =========================
 # 🏷 USERNAME CAPTURE
 # =========================
