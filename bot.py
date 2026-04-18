@@ -2073,29 +2073,26 @@ def _process_single(message):
         )
 
     else:
-        # 👑 ONLY ADMIN CAN HAVE CAPTION
-        if is_admin(sender_id):
-            media_caption = get_media_caption()
-            original_caption = message.caption or ""
+        media_caption = get_media_caption()
+        username = get_username(sender_id) or ''
+        original_caption = message.caption or ""
 
+        if is_admin(sender_id):
             if media_caption:
-                username = get_username(sender_id) or ''
                 new_caption = media_caption.replace("{username}", username).replace("{caption}", original_caption).strip()
             else:
                 new_caption = original_caption
-
-            send_fn = lambda uid: _copy_message_with_retry(
-                uid, sender_id, message.message_id,
-                reply_to_message_id=reply_map.get(uid),
-                caption=new_caption
-            )
         else:
-            # 🚀 NORMAL USERS → NO CAPTION AT ALL
-            send_fn = lambda uid: _copy_message_with_retry(
-                uid, sender_id, message.message_id,
-                reply_to_message_id=reply_map.get(uid),
-                caption=""
-            )
+            if media_caption:
+                new_caption = media_caption.replace("{username}", username).replace("{caption}", "").strip()
+            else:
+                new_caption = ""
+
+        send_fn = lambda uid: _copy_message_with_retry(
+            uid, sender_id, message.message_id,
+            reply_to_message_id=reply_map.get(uid),
+            caption=new_caption
+        )
     workers = max(1, min(SEND_MAX_WORKERS, len(targets)))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_uid = {
@@ -2146,15 +2143,18 @@ def _process_album(messages):
         
         if index == 0:
             original_caption = msg.caption or ""
+            username = get_username(sender_id) or ''
             
             if is_admin(sender_id):
                 if media_caption:
-                    username = get_username(sender_id) or ''
                     new_caption = media_caption.replace("{username}", username).replace("{caption}", original_caption).strip()
                 else:
                     new_caption = original_caption
             else:
-                new_caption = None  # 🚀 REMOVE FOR USERS
+                if media_caption:
+                    new_caption = media_caption.replace("{username}", username).replace("{caption}", "").strip()
+                else:
+                    new_caption = None  # 🚀 REMOVE FOR USERS
                     
         if msg.content_type == "photo":
             media_items.append((
