@@ -470,6 +470,27 @@ def set_referred_by(user_id, referrer_id):
                 WHERE user_id=%s AND referred_by IS NULL
             """, (referrer_id, user_id))
 
+def add_referral_bonus(user_id):
+    now = int(time.time())
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT last_activation_time FROM users WHERE user_id=%s", (user_id,))
+            row = c.fetchone()
+            if not row:
+                return
+            last_time = row[0]
+            
+            if last_time is None or last_time < now - INACTIVITY_LIMIT:
+                new_last_time = now - INACTIVITY_LIMIT + 3600
+            else:
+                new_last_time = last_time + 3600
+                
+            c.execute("""
+                UPDATE users
+                SET last_activation_time = %s,
+                    auto_banned = FALSE
+                WHERE user_id=%s
+            """, (new_last_time, user_id))
 def add_user(user_id):
     with get_connection() as conn:
         with conn.cursor() as c:
@@ -478,6 +499,7 @@ def add_user(user_id):
                 VALUES(%s)
                 ON CONFLICT DO NOTHING
             """, (user_id,))
+
 # =========================
 # 🏷 USERNAME HELPERS
 # =========================
@@ -1499,6 +1521,19 @@ def start_command(message):
     else:
         bot.send_message(user_id, "👋 Welcome back!")
 
+@bot.message_handler(commands=['referral'])
+def referral_command(message):
+    user_id = message.chat.id
+    try:
+        bot_info = bot.get_me()
+        ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
+        bot.send_message(
+            user_id,
+            f"🔗 Your referral link:\n{ref_link}\n\nShare this link to get 1 hour of free activity time for every user who joins!"
+        )
+    except Exception as e:
+        bot.send_message(user_id, "Error generating referral link. Please try again later.")
+        print(f"Referral link error: {e}")
 # =========================
 # 🏷 USERNAME CAPTURE
 # =========================
