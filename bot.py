@@ -75,6 +75,8 @@ pending_vip_remove = set()
 pending_fw_msg = set()
 pending_admin_broadcast = set()
 pending_admin_setcaption = set()
+pending_admin_setwelcome = set()
+pending_admin_addforward = set()
 force_join_cache_lock = threading.Lock()
 force_join_cache = {}
 force_join_reminder_lock = threading.Lock()
@@ -497,13 +499,16 @@ def add_referral_bonus(user_id):
                 WHERE user_id=%s
             """, (new_last_time, user_id))
 def add_user(user_id):
+    now = int(time.time())
+    free_activation_time = now - INACTIVITY_LIMIT + 3600
+    
     with get_connection() as conn:
         with conn.cursor() as c:
             c.execute("""
-                INSERT INTO users(user_id)
-                VALUES(%s)
+                INSERT INTO users(user_id, last_activation_time)
+                VALUES(%s, %s)
                 ON CONFLICT DO NOTHING
-            """, (user_id,))
+            """, (user_id, free_activation_time))
 
 # =========================
 # 🏷 USERNAME HELPERS
@@ -2207,7 +2212,7 @@ def _process_album(messages):
 
 @bot.message_handler(
     func=lambda m: m.content_type == "text" and m.chat.id in (
-        pending_fw_add | pending_fw_remove | pending_vip_add | pending_vip_remove | pending_fw_msg | pending_admin_broadcast | pending_admin_setcaption
+        pending_fw_add | pending_fw_remove | pending_vip_add | pending_vip_remove | pending_fw_msg | pending_admin_broadcast | pending_admin_setcaption | pending_admin_setwelcome | pending_admin_addforward
     ),
     content_types=['text']
 )
@@ -2220,6 +2225,8 @@ def handle_admin_pending_inputs(message):
         pending_fw_msg.discard(message.chat.id)
         pending_admin_broadcast.discard(message.chat.id)
         pending_admin_setcaption.discard(message.chat.id)
+        pending_admin_setwelcome.discard(message.chat.id)
+        pending_admin_addforward.discard(message.chat.id)
         return
 
     text = (message.text or "").strip()
@@ -2295,6 +2302,51 @@ def handle_admin_pending_inputs(message):
         set_media_caption(val)
         bot.send_message(message.chat.id, f"✅ Media caption updated to:\n{val}")
         pending_admin_setcaption.discard(message.chat.id)
+        return
+
+    if message.chat.id in pending_admin_setwelcome:
+        if text.lower() == "/cancel":
+            bot.send_message(message.chat.id, "Set welcome cancelled.")
+            pending_admin_setwelcome.discard(message.chat.id)
+            return
+        if not text:
+            bot.send_message(message.chat.id, "Text cannot be empty.")
+            return
+        val = "" if text.lower() == 'none' else text
+        from media_bot import set_welcome_message
+        try:
+            set_welcome_message(val)
+        except NameError:
+            pass # Failsafe if not defined in outer scope but it is
+        bot.send_message(message.chat.id, "✅ Welcome message updated.")
+        pending_admin_setwelcome.discard(message.chat.id)
+        return
+
+    if message.chat.id in pending_admin_addforward:
+        if text.lower() == "/cancel":
+            bot.send_message(message.chat.id, "Add forward cancelled.")
+            pending_admin_addforward.discard(message.chat.id)
+            return
+        chat_id = None
+        target_name = None
+        try:
+            chat_id = int(text)
+        except:
+            if getattr(message, "forward_from_chat", None):
+                chat_id = message.forward_from_chat.id
+                target_name = getattr(message.forward_from_chat, "title", None)
+            else:
+                bot.send_message(message.chat.id, "Invalid CHAT_ID. Send a numeric ID or forward a text from the target channel.")
+                return
+        if chat_id:
+            from media_bot import add_forward_target
+            try:
+                add_forward_target(chat_id)
+            except NameError:
+                pass
+            name_str = f" {target_name}" if target_name else ""
+            bot.send_message(message.chat.id, f"✅ Forward target added:{name_str} ({chat_id})")
+            pending_admin_addforward.discard(message.chat.id)
         return
 
 # =========================
@@ -2711,7 +2763,11 @@ def _panel_moderation_markup():
         InlineKeyboardButton("🧹 Clear Map", callback_data="admin_clearmap"),
     )
     markup.add(
-        InlineKeyboardButton("📝 Edit Caption", callback_data="admin_setcaption")
+        InlineKeyboardButton("📝 Edit Caption", callback_data="admin_setcaption"),
+        InlineKeyboardButton("👋 Set Welcome", callback_data="admin_setwelcome")
+    )
+    markup.add(
+        InlineKeyboardButton("➕ Add Forward", callback_data="admin_addforward")
     )
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="panel_back"))
     return markup
@@ -3672,6 +3728,16 @@ def admin_callbacks(call):
         pending_admin_setcaption.add(call.from_user.id)
         bot.answer_callback_query(call.id, "Awaiting new caption")
         bot.send_message(call.from_user.id, "📝 Send the new caption template. Type /cancel to stop.\nUse {username} to include sender name.\nUse {caption} to include original caption.\nType 'none' to clear it entirely.")
+
+    elif data == "admin_setwelcome":
+        pending_admin_setwelcome.add(call.from_user.id)
+        bot.answer_callback_query(call.id, "Awaiting welcome message")
+        bot.send_message(call.from_user.id, "👋 Send the new welcome message text. Type /cancel to abort.\nType 'none' to remove it.")
+
+    elif data == "admin_addforward":
+        pending_admin_addforward.add(call.from_user.id)
+        bot.answer_callback_query(call.id, "Awaiting forward target")
+        bot.send_message(call.from_user.id, "➕ Send the CHAT_ID for the forward target. You can also forward a text message from the target channel/group here. Type /cancel to abort.")
 
     elif data == "admin_banned":
         with get_connection() as conn:
