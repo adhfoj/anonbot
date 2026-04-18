@@ -139,6 +139,10 @@ def init_db():
                 )
             """)
             c.execute("""
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS referred_by BIGINT
+            """)
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS recovery_users (
                     username TEXT PRIMARY KEY,
                     banned BOOLEAN DEFAULT FALSE
@@ -2203,6 +2207,33 @@ def relay(message):
         bot.send_message(message.chat.id, "Bot is under maintenance. Try again later.")
         return
 
+    # =========================
+    # ↩️ CROSS-REPLY FEATURE
+    # =========================
+    if message.reply_to_message:
+        bot_msg_id = message.reply_to_message.message_id
+        receiver_id = message.chat.id
+        with get_connection() as conn:
+            with conn.cursor() as c:
+                c.execute(
+                    "SELECT original_user_id, original_message_id FROM message_map WHERE bot_message_id=%s AND receiver_id=%s LIMIT 1",
+                    (bot_msg_id, receiver_id)
+                )
+                row = c.fetchone()
+        if row and row[0]:
+            orig_user, orig_msg = row
+            prefix = f"↩️ Reply from {get_username(message.chat.id) or 'Someone'}:\n"
+            try:
+                if message.content_type == 'text':
+                    bot.send_message(orig_user, prefix + (message.text or ""), reply_to_message_id=orig_msg)
+                else:
+                    bot.send_message(orig_user, prefix, reply_to_message_id=orig_msg)
+                    bot.copy_message(orig_user, message.chat.id, message.message_id, reply_to_message_id=orig_msg)
+                bot.send_message(message.chat.id, "✅ Reply sent successfully.")
+            except Exception:
+                bot.send_message(message.chat.id, "⚠️ Failed to send reply.")
+            return
+
     if is_force_join_enabled() and not is_admin(message.chat.id):
         joined = is_user_joined(message.chat.id)
         # Re-check once with fresh API data to avoid stale negative-cache blocking.
@@ -3616,6 +3647,64 @@ def get_chat_id(message):
 @bot.channel_post_handler(commands=['cchatid'])
 def get_channel_id(message):
     bot.send_message(message.chat.id, f"Channel ID: {message.chat.id}")
+
+# =========================
+# 🎁 REFERRAL SYSTEM
+# =========================
+
+def set_referred_by(user_id, referrer_id):
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "UPDATE users SET referred_by=%s WHERE user_id=%s",
+                (referrer_id, user_id)
+            )
+
+def add_referral_bonus(referrer_id):
+    now = int(time.time())
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                UPDATE users
+                SET last_activation_time = GREATEST(%s - %s, COALESCE(last_activation_time, 0)) + 3600,
+                    auto_banned = FALSE,
+                    activation_media_count = 0
+                WHERE user_id=%s
+            """, (now, INACTIVITY_LIMIT, referrer_id))
+
+@bot.message_handler(commands=['menu'])
+def menu_command(message):
+    user_id = message.chat.id
+    if is_banned(user_id):
+        bot.send_message(user_id, "🚫 You are banned.")
+        return
+
+    now = int(time.time())
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT COUNT(*) FROM users WHERE referred_by=%s", (user_id,))
+            invites = c.fetchone()[0]
+            
+            c.execute("SELECT last_activation_time FROM users WHERE user_id=%s", (user_id,))
+            row = c.fetchone()
+            
+    if row and row[0]:
+        last_act = row[0]
+        time_left = max(0, (last_act + INACTIVITY_LIMIT) - now)
+    else:
+        time_left = 0
+
+    hours = time_left // 3600
+    minutes = (time_left % 3600) // 60
+    
+    bot.send_message(
+        user_id,
+        f"📊 *Your Dashboard*\n\n"
+        f"👥 *Users Invited:* {invites}\n"
+        f"⏳ *Activity Time Left:* {hours}h {minutes}m\n\n"
+        f"Use /referral to get your invite link and earn more time (1 invite = +1 hour)!",
+        parse_mode="Markdown"
+    )
 
 # =========================
 # 🚀 MAIN BOOT
