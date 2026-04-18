@@ -1898,7 +1898,7 @@ def _retry_after_seconds(error):
     return None
 
 
-def _copy_message_with_retry(user_id, sender_id, message_id, reply_to_message_id=None):
+def _copy_message_with_retry(user_id, sender_id, message_id, reply_to_message_id=None, **kwargs):
     attempts = max(0, SEND_RETRIES) + 1
     for i in range(attempts):
         try:
@@ -1907,7 +1907,7 @@ def _copy_message_with_retry(user_id, sender_id, message_id, reply_to_message_id
                 from_chat_id=sender_id,
                 message_id=message_id,
                 reply_to_message_id=reply_to_message_id,
-                caption=""  # 🚀 ALWAYS REMOVE CAPTION
+                **kwargs
             )
             if FORWARD_DELAY > 0:
                 time.sleep(FORWARD_DELAY)
@@ -2042,7 +2042,6 @@ def _process_single(message):
     store_mapping = should_store_mapping(sender_id, targets)
     mappings = []
     now = int(time.time())
-    prefix = build_prefix(sender_id)
     if not targets:
         return
     reply_map = {}
@@ -2067,25 +2066,35 @@ def _process_single(message):
                         reply_map[r_id] = b_id
 
     if message.content_type == "text":
+        prefix = build_prefix(sender_id)
         text_to_send = prefix + (message.text or "")
-        send_fn = lambda uid: _send_text_with_retry(uid, text_to_send, reply_to_message_id=reply_map.get(uid))
+        send_fn = lambda uid: _send_text_with_retry(
+            uid, text_to_send, reply_to_message_id=reply_map.get(uid)
+        )
+
     else:
-        new_caption = message.caption or ""
-        media_prefix = get_media_prefix()
-        if media_prefix:
-            username = get_username(sender_id) or ''
-            final_prefix = media_prefix.replace("{username}", username)
-            new_caption = f"{final_prefix}\n{new_caption}".strip()
-            
-            ents = []
-            if message.caption_entities:
-                import telebot
-                shift = len(final_prefix) + 1
-                for e in message.caption_entities:
-                    ents.append(telebot.types.MessageEntity(type=e.type, offset=e.offset + shift, length=e.length, url=e.url, user=e.user, language=e.language, custom_emoji_id=e.custom_emoji_id))
-            send_fn = lambda uid: _copy_message_with_retry(uid, sender_id, message.message_id, reply_to_message_id=reply_map.get(uid), caption=new_caption, caption_entities=ents)
+        # 👑 ONLY ADMIN CAN HAVE CAPTION
+        if is_admin(sender_id):
+            media_prefix = get_media_prefix()
+            new_caption = message.caption or ""
+
+            if media_prefix:
+                username = get_username(sender_id) or ''
+                final_prefix = media_prefix.replace("{username}", username)
+                new_caption = f"{final_prefix}\n{new_caption}".strip()
+
+            send_fn = lambda uid: _copy_message_with_retry(
+                uid, sender_id, message.message_id,
+                reply_to_message_id=reply_map.get(uid),
+                caption=new_caption
+            )
         else:
-            send_fn = lambda uid: _copy_message_with_retry(uid, sender_id, message.message_id, reply_to_message_id=reply_map.get(uid))
+            # 🚀 NORMAL USERS → NO CAPTION AT ALL
+            send_fn = lambda uid: _copy_message_with_retry(
+                uid, sender_id, message.message_id,
+                reply_to_message_id=reply_map.get(uid),
+                caption=""
+            )
     workers = max(1, min(SEND_MAX_WORKERS, len(targets)))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_uid = {
@@ -2133,22 +2142,19 @@ def _process_album(messages):
     for index, msg in enumerate(messages):
         new_caption = None
         new_ents = None
+        
         if index == 0:
             original_caption = msg.caption or ""
-            if media_prefix:
-                username = get_username(sender_id) or ''
-                final_prefix = media_prefix.replace("{username}", username)
-                new_caption = f"{final_prefix}\n{original_caption}".strip()
-                import telebot
-                shift = len(final_prefix) + 1
-                if msg.caption_entities:
-                    new_ents = []
-                    for e in msg.caption_entities:
-                        new_ents.append(telebot.types.MessageEntity(type=e.type, offset=e.offset + shift, length=e.length, url=e.url, user=e.user, language=e.language, custom_emoji_id=e.custom_emoji_id))
+            
+            if is_admin(sender_id):
+                if media_prefix:
+                    username = get_username(sender_id) or ''
+                    final_prefix = media_prefix.replace("{username}", username)
+                    new_caption = f"{final_prefix}\n{original_caption}".strip()
+                else:
+                    new_caption = original_caption
             else:
-                new_caption = original_caption
-                if msg.caption_entities:
-                    new_ents = msg.caption_entities
+                new_caption = None  # 🚀 REMOVE FOR USERS
                     
         if msg.content_type == "photo":
             media_items.append((
