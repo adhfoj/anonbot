@@ -74,6 +74,7 @@ pending_vip_add = set()
 pending_vip_remove = set()
 pending_fw_msg = set()
 pending_admin_broadcast = set()
+pending_admin_setcaption = set()
 force_join_cache_lock = threading.Lock()
 force_join_cache = {}
 force_join_reminder_lock = threading.Lock()
@@ -2206,7 +2207,7 @@ def _process_album(messages):
 
 @bot.message_handler(
     func=lambda m: m.content_type == "text" and m.chat.id in (
-        pending_fw_add | pending_fw_remove | pending_vip_add | pending_vip_remove | pending_fw_msg | pending_admin_broadcast
+        pending_fw_add | pending_fw_remove | pending_vip_add | pending_vip_remove | pending_fw_msg | pending_admin_broadcast | pending_admin_setcaption
     ),
     content_types=['text']
 )
@@ -2218,6 +2219,7 @@ def handle_admin_pending_inputs(message):
         pending_vip_remove.discard(message.chat.id)
         pending_fw_msg.discard(message.chat.id)
         pending_admin_broadcast.discard(message.chat.id)
+        pending_admin_setcaption.discard(message.chat.id)
         return
 
     text = (message.text or "").strip()
@@ -2279,6 +2281,20 @@ def handle_admin_pending_inputs(message):
         sent = admin_broadcast_text(message.chat.id, text)
         bot.send_message(message.chat.id, f"📣 Broadcast sent to {sent} targets.")
         pending_admin_broadcast.discard(message.chat.id)
+        return
+
+    if message.chat.id in pending_admin_setcaption:
+        if text.lower() == "/cancel":
+            bot.send_message(message.chat.id, "Caption update cancelled.")
+            pending_admin_setcaption.discard(message.chat.id)
+            return
+        if not text:
+            bot.send_message(message.chat.id, "Caption cannot be empty. Type /cancel to abort or 'none' to clear.")
+            return
+        val = text if text.lower() != 'none' else ""
+        set_media_caption(val)
+        bot.send_message(message.chat.id, f"✅ Media caption updated to:\n{val}")
+        pending_admin_setcaption.discard(message.chat.id)
         return
 
 # =========================
@@ -2693,6 +2709,9 @@ def _panel_moderation_markup():
     markup.add(
         InlineKeyboardButton("🚫 Banned List", callback_data="admin_banned"),
         InlineKeyboardButton("🧹 Clear Map", callback_data="admin_clearmap"),
+    )
+    markup.add(
+        InlineKeyboardButton("📝 Edit Caption", callback_data="admin_setcaption")
     )
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="panel_back"))
     return markup
@@ -3648,6 +3667,11 @@ def admin_callbacks(call):
             with conn.cursor() as c:
                 c.execute("DELETE FROM message_map")
         bot.answer_callback_query(call.id, "Message map cleared.")
+
+    elif data == "admin_setcaption":
+        pending_admin_setcaption.add(call.from_user.id)
+        bot.answer_callback_query(call.id, "Awaiting new caption")
+        bot.send_message(call.from_user.id, "📝 Send the new caption template. Type /cancel to stop.\nUse {username} to include sender name.\nUse {caption} to include original caption.\nType 'none' to clear it entirely.")
 
     elif data == "admin_banned":
         with get_connection() as conn:
