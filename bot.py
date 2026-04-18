@@ -1876,7 +1876,7 @@ def _retry_after_seconds(error):
     return None
 
 
-def _copy_message_with_retry(user_id, sender_id, message_id):
+def _copy_message_with_retry(user_id, sender_id, message_id, reply_to_message_id=None):
     attempts = max(0, SEND_RETRIES) + 1
     for i in range(attempts):
         try:
@@ -1884,6 +1884,7 @@ def _copy_message_with_retry(user_id, sender_id, message_id):
                 chat_id=user_id,
                 from_chat_id=sender_id,
                 message_id=message_id,
+                reply_to_message_id=reply_to_message_id
             )
             if FORWARD_DELAY > 0:
                 time.sleep(FORWARD_DELAY)
@@ -1900,11 +1901,11 @@ def _copy_message_with_retry(user_id, sender_id, message_id):
     return None
 
 
-def _send_text_with_retry(user_id, text):
+def _send_text_with_retry(user_id, text, reply_to_message_id=None):
     attempts = max(0, SEND_RETRIES) + 1
     for i in range(attempts):
         try:
-            sent = bot.send_message(user_id, text)
+            sent = bot.send_message(user_id, text, reply_to_message_id=reply_to_message_id)
             if FORWARD_DELAY > 0:
                 time.sleep(FORWARD_DELAY)
             return sent
@@ -2021,11 +2022,29 @@ def _process_single(message):
     prefix = build_prefix(sender_id)
     if not targets:
         return
+    reply_map = {}
+    if getattr(message, "reply_to_message", None):
+        bot_msg_id_sender = message.reply_to_message.message_id
+        with get_connection() as conn:
+            with conn.cursor() as c:
+                c.execute(
+                    "SELECT original_user_id, original_message_id FROM message_map WHERE bot_message_id=%s AND receiver_id=%s LIMIT 1",
+                    (bot_msg_id_sender, sender_id)
+                )
+                row = c.fetchone()
+                if row and row[0]:
+                    c.execute(
+                        "SELECT receiver_id, bot_message_id FROM message_map WHERE original_user_id=%s AND original_message_id=%s",
+                        (row[0], row[1])
+                    )
+                    for r_id, b_id in c.fetchall():
+                        reply_map[r_id] = b_id
+
     if message.content_type == "text":
         text_to_send = prefix + (message.text or "")
-        send_fn = lambda uid: _send_text_with_retry(uid, text_to_send)
+        send_fn = lambda uid: _send_text_with_retry(uid, text_to_send, reply_to_message_id=reply_map.get(uid))
     else:
-        send_fn = lambda uid: _copy_message_with_retry(uid, sender_id, message.message_id)
+        send_fn = lambda uid: _copy_message_with_retry(uid, sender_id, message.message_id, reply_to_message_id=reply_map.get(uid))
     workers = max(1, min(SEND_MAX_WORKERS, len(targets)))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_uid = {
@@ -2206,33 +2225,6 @@ def relay(message):
     if is_maintenance_mode() and not is_admin(message.chat.id):
         bot.send_message(message.chat.id, "Bot is under maintenance. Try again later.")
         return
-
-    # =========================
-    # ↩️ CROSS-REPLY FEATURE
-    # =========================
-    if message.reply_to_message:
-        bot_msg_id = message.reply_to_message.message_id
-        receiver_id = message.chat.id
-        with get_connection() as conn:
-            with conn.cursor() as c:
-                c.execute(
-                    "SELECT original_user_id, original_message_id FROM message_map WHERE bot_message_id=%s AND receiver_id=%s LIMIT 1",
-                    (bot_msg_id, receiver_id)
-                )
-                row = c.fetchone()
-        if row and row[0]:
-            orig_user, orig_msg = row
-            prefix = f"↩️ Reply from {get_username(message.chat.id) or 'Someone'}:\n"
-            try:
-                if message.content_type == 'text':
-                    bot.send_message(orig_user, prefix + (message.text or ""), reply_to_message_id=orig_msg)
-                else:
-                    bot.send_message(orig_user, prefix, reply_to_message_id=orig_msg)
-                    bot.copy_message(orig_user, message.chat.id, message.message_id, reply_to_message_id=orig_msg)
-                bot.send_message(message.chat.id, "✅ Reply sent successfully.")
-            except Exception:
-                bot.send_message(message.chat.id, "⚠️ Failed to send reply.")
-            return
 
     if is_force_join_enabled() and not is_admin(message.chat.id):
         joined = is_user_joined(message.chat.id)
