@@ -2618,7 +2618,10 @@ def _panel_users_markup():
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🚫 Banned List", callback_data="admin_banned"),
-        InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
+        InlineKeyboardButton("👥 User List", callback_data="admin_userlist"),
+    )
+    markup.add(
+        InlineKeyboardButton("🏆 Leaderboard", callback_data="admin_leaderboard"),
     )
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="panel_back"))
     return markup
@@ -3599,6 +3602,55 @@ def admin_callbacks(call):
             text = "No banned users."
 
         bot.send_message(call.message.chat.id, text)
+
+    elif data == "admin_userlist":
+        with get_connection() as conn:
+            with conn.cursor() as c:
+                c.execute("""
+                    SELECT u.username, u.total_media_sent, COUNT(r.user_id)
+                    FROM users u
+                    LEFT JOIN users r ON r.referred_by = u.user_id
+                    WHERE u.username IS NOT NULL
+                    GROUP BY u.user_id, u.username, u.total_media_sent
+                    ORDER BY u.total_media_sent DESC
+                    LIMIT 100
+                """)
+                rows = c.fetchall()
+        
+        if rows:
+            lines = ["👥 *User List (Active)*", ""]
+            for row in rows:
+                lines.append(f"• @{row[0]} | 📸 {row[1]} | 🎁 {row[2]} referrals")
+            text = "\n".join(lines)
+        else:
+            text = "No users found."
+        
+        bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
+
+    elif data == "admin_leaderboard":
+        with get_connection() as conn:
+            with conn.cursor() as c:
+                c.execute("""
+                    SELECT u.username, COUNT(r.user_id) as refs
+                    FROM users u
+                    LEFT JOIN users r ON r.referred_by = u.user_id
+                    WHERE u.username IS NOT NULL
+                    GROUP BY u.user_id, u.username
+                    HAVING COUNT(r.user_id) > 0
+                    ORDER BY refs DESC
+                    LIMIT 20
+                """)
+                rows = c.fetchall()
+        
+        if rows:
+            lines = ["🏆 *Top Referrers Leaderboard*", ""]
+            for i, row in enumerate(rows, 1):
+                lines.append(f"{i}. @{row[0]} - {row[1]} invites")
+            text = "\n".join(lines)
+        else:
+            text = "No referrals yet."
+            
+        bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
 
     elif data == "admin_export_recovery":
         payload = export_recovery_payload()
