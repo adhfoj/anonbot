@@ -2033,9 +2033,12 @@ def _process_single(message):
                 )
                 row = c.fetchone()
                 if row and row[0]:
+                    orig_uid, orig_msg_id = row[0], row[1]
+                    reply_map[orig_uid] = orig_msg_id
+                    
                     c.execute(
                         "SELECT receiver_id, bot_message_id FROM message_map WHERE original_user_id=%s AND original_message_id=%s",
-                        (row[0], row[1])
+                        (orig_uid, orig_msg_id)
                     )
                     for r_id, b_id in c.fetchall():
                         reply_map[r_id] = b_id
