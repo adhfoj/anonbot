@@ -1906,7 +1906,8 @@ def _copy_message_with_retry(user_id, sender_id, message_id, reply_to_message_id
                 chat_id=user_id,
                 from_chat_id=sender_id,
                 message_id=message_id,
-                reply_to_message_id=reply_to_message_id
+                reply_to_message_id=reply_to_message_id,
+                caption=""  # 🚀 ALWAYS REMOVE CAPTION
             )
             if FORWARD_DELAY > 0:
                 time.sleep(FORWARD_DELAY)
