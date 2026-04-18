@@ -3596,23 +3596,35 @@ def admin_callbacks(call):
         bot.send_message(call.message.chat.id, text)
 
     elif data == "admin_userlist":
+        bot.send_message(call.message.chat.id, "🔄 Fetching user data...")
         with get_connection() as conn:
             with conn.cursor() as c:
                 c.execute("""
-                    SELECT u.username, u.total_media_sent, COUNT(r.user_id)
+                    SELECT u.user_id, u.username, u.total_media_sent, COUNT(r.user_id)
                     FROM users u
                     LEFT JOIN users r ON r.referred_by = u.user_id
                     WHERE u.username IS NOT NULL
                     GROUP BY u.user_id, u.username, u.total_media_sent
                     ORDER BY u.total_media_sent DESC
-                    LIMIT 100
+                    LIMIT 30
                 """)
                 rows = c.fetchall()
         
         if rows:
-            lines = ["👥 *User List (Active)*", ""]
+            lines = ["👥 *User List (Top 30)*", ""]
             for row in rows:
-                lines.append(f"• @{row[0]} | 📸 {row[1]} | 🎁 {row[2]} referrals")
+                uid, fallback, media, refs = row[0], row[1], row[2], row[3]
+                display_name = f"@{fallback}"
+                try:
+                    chat = bot.get_chat(uid)
+                    if chat.username:
+                        display_name = f"@{chat.username}"
+                    else:
+                        full = f"{chat.first_name or ''} {chat.last_name or ''}".strip()
+                        if full: display_name = full
+                except Exception:
+                    pass
+                lines.append(f"• {display_name} | 📸 {media} | 🎁 {refs} referrals")
             text = "\n".join(lines)
         else:
             text = "No users found."
@@ -3620,10 +3632,11 @@ def admin_callbacks(call):
         bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
 
     elif data == "admin_leaderboard":
+        bot.send_message(call.message.chat.id, "🔄 Fetching leaderboard...")
         with get_connection() as conn:
             with conn.cursor() as c:
                 c.execute("""
-                    SELECT u.username, COUNT(r.user_id) as refs
+                    SELECT u.user_id, u.username, COUNT(r.user_id) as refs
                     FROM users u
                     LEFT JOIN users r ON r.referred_by = u.user_id
                     WHERE u.username IS NOT NULL
@@ -3637,7 +3650,18 @@ def admin_callbacks(call):
         if rows:
             lines = ["🏆 *Top Referrers Leaderboard*", ""]
             for i, row in enumerate(rows, 1):
-                lines.append(f"{i}. @{row[0]} - {row[1]} invites")
+                uid, fallback, refs = row[0], row[1], row[2]
+                display_name = f"@{fallback}"
+                try:
+                    chat = bot.get_chat(uid)
+                    if chat.username:
+                        display_name = f"@{chat.username}"
+                    else:
+                        full = f"{chat.first_name or ''} {chat.last_name or ''}".strip()
+                        if full: display_name = full
+                except Exception:
+                    pass
+                lines.append(f"{i}. {display_name} - {refs} invites")
             text = "\n".join(lines)
         else:
             text = "No referrals yet."
