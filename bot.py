@@ -2247,7 +2247,7 @@ def _process_album(messages):
 
 @bot.message_handler(
     func=lambda m: m.chat.id in (
-        pending_fw_add | pending_fw_remove | pending_vip_add | pending_vip_remove | pending_fw_msg | pending_admin_broadcast | pending_admin_setcaption | pending_admin_setwelcome | pending_admin_addforward
+        pending_fw_add | pending_fw_remove | pending_vip_add | pending_vip_remove | pending_fw_msg | pending_admin_broadcast | pending_admin_setcaption | pending_admin_setwelcome | pending_admin_setinactive | pending_admin_addforward
     ),
     content_types=['text', 'photo', 'video', 'document', 'audio', 'voice']
 )
@@ -2261,6 +2261,7 @@ def handle_admin_pending_inputs(message):
         pending_admin_broadcast.discard(message.chat.id)
         pending_admin_setcaption.discard(message.chat.id)
         pending_admin_setwelcome.discard(message.chat.id)
+        pending_admin_setinactive.discard(message.chat.id)
         pending_admin_addforward.discard(message.chat.id)
         return
 
@@ -2352,11 +2353,7 @@ def handle_admin_pending_inputs(message):
             bot.send_message(message.chat.id, "Text cannot be empty.")
             return
         val = "" if text.lower() == 'none' else text
-        from media_bot import set_welcome_message
-        try:
-            set_welcome_message(val)
-        except NameError:
-            pass # Failsafe if not defined in outer scope but it is
+        set_welcome_message(val)
         bot.send_message(message.chat.id, "✅ Welcome message updated.")
         pending_admin_setwelcome.discard(message.chat.id)
         return
@@ -2392,11 +2389,7 @@ def handle_admin_pending_inputs(message):
                 bot.send_message(message.chat.id, "Invalid CHAT_ID. Send a numeric ID or forward a text from the target channel.")
                 return
         if chat_id:
-            from media_bot import add_forward_target
-            try:
-                add_forward_target(chat_id)
-            except NameError:
-                pass
+            add_forward_target(chat_id)
             name_str = f" {target_name}" if target_name else ""
             bot.send_message(message.chat.id, f"✅ Forward target added:{name_str} ({chat_id})")
             pending_admin_addforward.discard(message.chat.id)
@@ -2588,10 +2581,10 @@ def start_background_workers():
     ).start()
 
     # Force Join Enforcement Scheduler
-    threading.Thread(
-        target=force_join_enforcement_scheduler,
-        daemon=True
-    ).start()
+    # threading.Thread(
+    #     target=force_join_enforcement_scheduler,
+    #     daemon=True
+    # ).start()
     
 # =========================
 # ADMIN COMMANDS
