@@ -76,6 +76,7 @@ pending_fw_msg = set()
 pending_admin_broadcast = set()
 pending_admin_setcaption = set()
 pending_admin_setwelcome = set()
+pending_admin_setinactive = set()
 pending_admin_addforward = set()
 force_join_cache_lock = threading.Lock()
 force_join_cache = {}
@@ -262,10 +263,15 @@ def init_db():
                     duplicate_count INTEGER DEFAULT 0
                 )
             """)
-            # Default Welcome Message
             c.execute("""
                 INSERT INTO settings(key, value)
                 VALUES('welcome_message', '👋 Welcome!\n\nPlease drop your username:')
+                ON CONFLICT DO NOTHING
+            """)
+            
+            c.execute("""
+                INSERT INTO settings(key, value)
+                VALUES('inactive_message', '⏳ You have been marked inactive.\nSend 12 media to reactivate.')
                 ON CONFLICT DO NOTHING
             """)
 
@@ -1363,6 +1369,24 @@ def set_welcome_message(text):
                 SET value=%s
                 WHERE key='welcome_message'
             """, (text,))
+
+def get_inactive_message():
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT value FROM settings WHERE key='inactive_message'"
+            )
+            row = c.fetchone()
+            return row[0] if row else "⏳ You have been marked inactive.\nSend 12 media to reactivate."
+
+def set_inactive_message(text):
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                UPDATE settings
+                SET value=%s
+                WHERE key='inactive_message'
+            """, (text,))
 # =========================
 # 🔄 ACTIVATE USER
 # =========================
@@ -1415,7 +1439,18 @@ def auto_ban_inactive_users():
                 WHERE auto_banned = FALSE
                   AND last_activation_time IS NOT NULL
                   AND last_activation_time < %s
+                RETURNING user_id
             """, (limit,))
+            rows = c.fetchall()
+            
+    if rows:
+        msg = get_inactive_message()
+        for r in rows:
+            user_id = r[0]
+            try:
+                bot.send_message(user_id, msg)
+            except Exception:
+                pass
             
 def is_duplicate_filter_enabled():
     with get_connection() as conn:
@@ -2211,10 +2246,10 @@ def _process_album(messages):
 
 
 @bot.message_handler(
-    func=lambda m: m.content_type == "text" and m.chat.id in (
+    func=lambda m: m.chat.id in (
         pending_fw_add | pending_fw_remove | pending_vip_add | pending_vip_remove | pending_fw_msg | pending_admin_broadcast | pending_admin_setcaption | pending_admin_setwelcome | pending_admin_addforward
     ),
-    content_types=['text']
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'voice']
 )
 def handle_admin_pending_inputs(message):
     if not is_admin(message.chat.id):
@@ -2227,6 +2262,10 @@ def handle_admin_pending_inputs(message):
         pending_admin_setcaption.discard(message.chat.id)
         pending_admin_setwelcome.discard(message.chat.id)
         pending_admin_addforward.discard(message.chat.id)
+        return
+
+    if message.content_type != 'text':
+        bot.send_message(message.chat.id, "⚠️ Please send text only for this input, or type /cancel to abort.")
         return
 
     text = (message.text or "").strip()
@@ -2320,6 +2359,20 @@ def handle_admin_pending_inputs(message):
             pass # Failsafe if not defined in outer scope but it is
         bot.send_message(message.chat.id, "✅ Welcome message updated.")
         pending_admin_setwelcome.discard(message.chat.id)
+        return
+
+    if message.chat.id in pending_admin_setinactive:
+        if text.lower() == "/cancel":
+            bot.send_message(message.chat.id, "Set inactive message cancelled.")
+            pending_admin_setinactive.discard(message.chat.id)
+            return
+        if not text:
+            bot.send_message(message.chat.id, "Text cannot be empty.")
+            return
+        val = "" if text.lower() == 'none' else text
+        set_inactive_message(val)
+        bot.send_message(message.chat.id, "✅ Inactive message updated.")
+        pending_admin_setinactive.discard(message.chat.id)
         return
 
     if message.chat.id in pending_admin_addforward:
@@ -2767,11 +2820,41 @@ def _panel_moderation_markup():
         InlineKeyboardButton("👋 Set Welcome", callback_data="admin_setwelcome")
     )
     markup.add(
-        InlineKeyboardButton("➕ Add Forward", callback_data="admin_addforward")
+        InlineKeyboardButton("➕ Add Forward", callback_data="admin_addforward"),
+        InlineKeyboardButton("⏳ Set Inactive", callback_data="admin_setinactive")
     )
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="panel_back"))
     return markup
 
+
+@bot.message_handler(commands=['setinactivemsg'])
+def set_inactive_message_cmd(message):
+    if not is_admin(message.chat.id):
+        return
+        
+    parts = message.text.split(maxsplit=1)
+    
+    if len(parts) < 2:
+        if message.reply_to_message and message.reply_to_message.text:
+            new_text = message.reply_to_message.text
+        else:
+            bot.send_message(
+                message.chat.id,
+                "Usage: /setinactivemsg [Your inactive message here]\nOr reply to a text message with /setinactivemsg.\nType 'none' to remove it."
+            )
+            return
+    else:
+        new_text = parts[1].strip()
+
+    if new_text.lower() == 'none':
+        new_text = ""
+
+    set_inactive_message(new_text)
+
+    bot.send_message(
+        message.chat.id,
+        "✅ Inactive message updated."
+    )
 
 @bot.message_handler(commands=['panel'])
 def admin_panel(message):
@@ -2788,18 +2871,23 @@ def set_welcome_cmd(message):
     if not is_admin(message.chat.id):
         return
 
-    if not message.reply_to_message:
-        bot.send_message(
-            message.chat.id,
-            "Reply to a message to set it as welcome message."
-        )
-        return
+    parts = message.text.split(maxsplit=1)
+    
+    if len(parts) < 2:
+        # Fallback to checking reply for backwards compatibility or if they prefer replies
+        if message.reply_to_message and message.reply_to_message.text:
+            new_text = message.reply_to_message.text
+        else:
+            bot.send_message(
+                message.chat.id,
+                "Usage: /setwelcome [Your welcome message here]\nOr reply to a text message with /setwelcome.\nType 'none' to remove it."
+            )
+            return
+    else:
+        new_text = parts[1].strip()
 
-    new_text = message.reply_to_message.text
-
-    if not new_text:
-        bot.send_message(message.chat.id, "Text only.")
-        return
+    if new_text.lower() == 'none':
+        new_text = ""
 
     set_welcome_message(new_text)
 
@@ -2807,6 +2895,7 @@ def set_welcome_cmd(message):
         message.chat.id,
         "✅ Welcome message updated."
     )
+
 
 @bot.message_handler(commands=['stats'])
 def stats_command(message):
@@ -3733,6 +3822,11 @@ def admin_callbacks(call):
         pending_admin_setwelcome.add(call.from_user.id)
         bot.answer_callback_query(call.id, "Awaiting welcome message")
         bot.send_message(call.from_user.id, "👋 Send the new welcome message text. Type /cancel to abort.\nType 'none' to remove it.")
+
+    elif data == "admin_setinactive":
+        pending_admin_setinactive.add(call.from_user.id)
+        bot.answer_callback_query(call.id, "Awaiting inactive message")
+        bot.send_message(call.from_user.id, "⏳ Send the new inactive message text. Type /cancel to abort.\nType 'none' to remove it.")
 
     elif data == "admin_addforward":
         pending_admin_addforward.add(call.from_user.id)
