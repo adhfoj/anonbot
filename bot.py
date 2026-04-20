@@ -31,7 +31,7 @@ FIRST_ADMIN_ID = os.getenv("ADMIN_ID") # replace with your Telegram ID for initi
 
 
 REQUIRED_MEDIA = 12
-INACTIVITY_LIMIT = 6 * 60 * 60  # 6 hours
+INACTIVITY_LIMIT = 48 * 60 * 60  # 6 hours
 FORWARD_DELAY = float(os.getenv("FORWARD_DELAY", "0.01"))
 SEND_MAX_WORKERS = int(os.getenv("SEND_MAX_WORKERS", "8"))
 SEND_RETRIES = int(os.getenv("SEND_RETRIES", "2"))
